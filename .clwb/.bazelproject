@@ -1,6 +1,6 @@
-# this file was hand-written to narrow down the scope of the project in when using JetBrains IDEs.
-# its definitions affect both which project dirs are visible as part of the project, IDE indexing,
-# and bazel sync/building behavior.
+# this file was hand-written to narrow down the scope of the project when using JetBrains IDEs.
+# its definitions affect both which project dirs are visible as part of the project in the IDE,
+# IDE indexing of the same, and mainly the scope of bazel syncing through the bazel plugin for JetBrains IDEs.
 
 directories:
   .
