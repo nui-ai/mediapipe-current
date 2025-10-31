@@ -26,7 +26,7 @@ targets:
   //mediapipe/tasks/python/vision/...
 
   //mediapipe/web/...
-  //mediapipe/tasks/web/vision/...
+  //mediapipe/tasks/web/vision/...  # does it reproduce the web version end-to-end? https://github.com/google-ai-edge/mediapipe/issues/4919#issuecomment-3473795109
 
   //mediapipe/tasks/c/vision/...
   # //mediapipe/tasks/cc/vision/...  # requires java setup
@@ -42,3 +42,4 @@ derive_targets_from_directories: false
 
 additional_languages:
   python
+  typescript
