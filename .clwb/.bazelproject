@@ -33,3 +33,6 @@ targets:
 
 derive_targets_from_directories: false
 
+
+additional_languages:
+  python
