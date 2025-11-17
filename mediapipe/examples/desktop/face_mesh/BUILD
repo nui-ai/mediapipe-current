@@ -29,7 +29,7 @@ cc_binary(
     deps = [
         "//mediapipe/examples/desktop:simple_run_graph_main",
         "//mediapipe/graphs/face_mesh:desktop_calculators",
-        "//security/restricted_deps/ffmpeg:allow",
+        # "//security/restricted_deps/ffmpeg:allow",  # this line fails because this path is not part of the public repo
     ],
 )
 
