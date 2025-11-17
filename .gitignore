@@ -1,3 +1,4 @@
+# original ignores
 bazel-*
 mediapipe/MediaPipe.xcodeproj
 mediapipe/MediaPipe.tulsiproj/*.tulsiconf-user
@@ -6,3 +7,10 @@ node_modules/
 .configure.bazelrc
 .user.bazelrc
 /.clwb
+
+# python build
+build/
+dist/
+*.egg-info
+
+.venv
