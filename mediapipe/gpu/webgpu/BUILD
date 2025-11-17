@@ -84,6 +84,7 @@ cc_library(
         "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
     ] + select({
         "//mediapipe:emscripten": [
         ],
@@ -120,14 +121,20 @@ cc_library(
         ":webgpu_texture_view",
         "//mediapipe/framework:legacy_calculator_support",
         "//mediapipe/framework/port:ret_check",
-        "//mediapipe/gpu:gpu_buffer",
         "//mediapipe/gpu:gpu_buffer_format",
         "//mediapipe/gpu:gpu_buffer_storage",
+        "//third_party/dawn:webgpu_headers",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
-    ],
+    ] + select({
+        "//mediapipe:emscripten": [
+        ],
+        "//conditions:default": [],
+    }),
     alwayslink = 1,
 )
 
@@ -226,6 +233,7 @@ cc_library(
         "//mediapipe/framework/port:status",
         "//mediapipe/gpu:gpu_buffer",
         "//mediapipe/gpu:gpu_buffer_format",
+        "//third_party/dawn:webgpu_headers",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",

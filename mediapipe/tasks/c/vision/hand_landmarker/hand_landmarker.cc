@@ -18,6 +18,7 @@ limitations under the License.
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "absl/log/absl_log.h"
@@ -25,6 +26,8 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "mediapipe/framework/formats/image.h"
 #include "mediapipe/tasks/c/core/base_options_converter.h"
+#include "mediapipe/tasks/c/core/mp_status.h"
+#include "mediapipe/tasks/c/core/mp_status_converter.h"
 #include "mediapipe/tasks/c/vision/core/common.h"
 #include "mediapipe/tasks/c/vision/core/image.h"
 #include "mediapipe/tasks/c/vision/core/image_frame_util.h"
@@ -52,12 +55,14 @@ using ::mediapipe::tasks::c::components::containers::
 using ::mediapipe::tasks::c::components::containers::
     CppConvertToHandLandmarkerResult;
 using ::mediapipe::tasks::c::core::CppConvertToBaseOptions;
+using ::mediapipe::tasks::c::core::ToMpStatus;
 using ::mediapipe::tasks::c::vision::core::CppConvertToImageProcessingOptions;
-using ::mediapipe::tasks::vision::CreateImageFromBuffer;
 using ::mediapipe::tasks::vision::core::RunningMode;
 using ::mediapipe::tasks::vision::hand_landmarker::HandLandmarker;
-typedef ::mediapipe::tasks::vision::hand_landmarker::HandLandmarkerResult
-    CppHandLandmarkerResult;
+using CppHandLandmarkerResult =
+    ::mediapipe::tasks::vision::hand_landmarker::HandLandmarkerResult;
+using CppImageProcessingOptions =
+    ::mediapipe::tasks::vision::core::ImageProcessingOptions;
 
 int CppProcessError(absl::Status status, char** error_msg) {
   if (error_msg) {
@@ -104,22 +109,17 @@ MpHandLandmarkerPtr CppHandLandmarkerCreate(
     cpp_options->result_callback =
         [result_callback](absl::StatusOr<CppHandLandmarkerResult> cpp_result,
                           const Image& image, int64_t timestamp) {
-          char* error_msg = nullptr;
-
+          MpImageInternal mp_image({.image = image});
           if (!cpp_result.ok()) {
-            ABSL_LOG(ERROR) << "Recognition failed: " << cpp_result.status();
-            CppProcessError(cpp_result.status(), &error_msg);
-            result_callback(nullptr, nullptr, timestamp, error_msg);
-            free(error_msg);
+            result_callback(ToMpStatus(cpp_result.status()), nullptr, &mp_image,
+                            timestamp);
             return;
           }
 
-          // Result is valid for the lifetime of the callback function.
-          auto result = std::make_unique<HandLandmarkerResult>();
-          CppConvertToHandLandmarkerResult(*cpp_result, result.get());
-          MpImageInternal mp_image = {.image = image};
-          result_callback(result.release(), &mp_image, timestamp,
-                          /* error_msg= */ nullptr);
+          HandLandmarkerResult result;
+          CppConvertToHandLandmarkerResult(*cpp_result, &result);
+          result_callback(kMpOk, &result, &mp_image, timestamp);
+          CppCloseHandLandmarkerResult(&result);
         };
   }
 
@@ -133,19 +133,19 @@ MpHandLandmarkerPtr CppHandLandmarkerCreate(
   return new MpHandLandmarkerInternal{.landmarker = std::move(*landmarker)};
 }
 
-int CppHandLandmarkerDetect(MpHandLandmarkerPtr landmarker, MpImagePtr image,
-                            const ImageProcessingOptions* options,
-                            HandLandmarkerResult* result, char** error_msg) {
+int CppHandLandmarkerDetect(
+    MpHandLandmarkerPtr landmarker, MpImagePtr image,
+    const ImageProcessingOptions* image_processing_options,
+    HandLandmarkerResult* result, char** error_msg) {
   auto cpp_landmarker = landmarker->landmarker.get();
-  absl::StatusOr<CppHandLandmarkerResult> cpp_result;
-
-  if (options) {
-    ::mediapipe::tasks::vision::core::ImageProcessingOptions cpp_options;
-    CppConvertToImageProcessingOptions(*options, &cpp_options);
-    cpp_result = cpp_landmarker->Detect(ToImage(image), cpp_options);
-  } else {
-    cpp_result = cpp_landmarker->Detect(ToImage(image));
+  std::optional<CppImageProcessingOptions> cpp_image_processing_options;
+  if (image_processing_options) {
+    CppImageProcessingOptions options;
+    CppConvertToImageProcessingOptions(*image_processing_options, &options);
+    cpp_image_processing_options = options;
   }
+  auto cpp_result =
+      cpp_landmarker->Detect(ToImage(image), cpp_image_processing_options);
 
   if (!cpp_result.ok()) {
     ABSL_LOG(ERROR) << "Recognition failed: " << cpp_result.status();
@@ -155,23 +155,19 @@ int CppHandLandmarkerDetect(MpHandLandmarkerPtr landmarker, MpImagePtr image,
   return 0;
 }
 
-int CppHandLandmarkerDetectForVideo(MpHandLandmarkerPtr landmarker,
-                                    MpImagePtr image,
-                                    const ImageProcessingOptions* options,
-                                    int64_t timestamp_ms,
-                                    HandLandmarkerResult* result,
-                                    char** error_msg) {
+int CppHandLandmarkerDetectForVideo(
+    MpHandLandmarkerPtr landmarker, MpImagePtr image,
+    const ImageProcessingOptions* image_processing_options,
+    int64_t timestamp_ms, HandLandmarkerResult* result, char** error_msg) {
   auto cpp_landmarker = landmarker->landmarker.get();
-  absl::StatusOr<CppHandLandmarkerResult> cpp_result;
-
-  if (options) {
-    ::mediapipe::tasks::vision::core::ImageProcessingOptions cpp_options;
-    CppConvertToImageProcessingOptions(*options, &cpp_options);
-    cpp_result = cpp_landmarker->DetectForVideo(ToImage(image), timestamp_ms,
-                                                cpp_options);
-  } else {
-    cpp_result = cpp_landmarker->DetectForVideo(ToImage(image), timestamp_ms);
+  std::optional<CppImageProcessingOptions> cpp_image_processing_options;
+  if (image_processing_options) {
+    CppImageProcessingOptions options;
+    CppConvertToImageProcessingOptions(*image_processing_options, &options);
+    cpp_image_processing_options = options;
   }
+  auto cpp_result = cpp_landmarker->DetectForVideo(
+      ToImage(image), timestamp_ms, cpp_image_processing_options);
 
   if (!cpp_result.ok()) {
     ABSL_LOG(ERROR) << "Recognition failed: " << cpp_result.status();
@@ -181,21 +177,19 @@ int CppHandLandmarkerDetectForVideo(MpHandLandmarkerPtr landmarker,
   return 0;
 }
 
-int CppHandLandmarkerDetectAsync(MpHandLandmarkerPtr landmarker,
-                                 MpImagePtr image,
-                                 const ImageProcessingOptions* options,
-                                 int64_t timestamp_ms, char** error_msg) {
+int CppHandLandmarkerDetectAsync(
+    MpHandLandmarkerPtr landmarker, MpImagePtr image,
+    const ImageProcessingOptions* image_processing_options,
+    int64_t timestamp_ms, char** error_msg) {
   auto cpp_landmarker = landmarker->landmarker.get();
-  absl::Status cpp_result;
-
-  if (options) {
-    ::mediapipe::tasks::vision::core::ImageProcessingOptions cpp_options;
-    CppConvertToImageProcessingOptions(*options, &cpp_options);
-    cpp_result =
-        cpp_landmarker->DetectAsync(ToImage(image), timestamp_ms, cpp_options);
-  } else {
-    cpp_result = cpp_landmarker->DetectAsync(ToImage(image), timestamp_ms);
+  std::optional<CppImageProcessingOptions> cpp_image_processing_options;
+  if (image_processing_options) {
+    CppImageProcessingOptions options;
+    CppConvertToImageProcessingOptions(*image_processing_options, &options);
+    cpp_image_processing_options = options;
   }
+  auto cpp_result = cpp_landmarker->DetectAsync(ToImage(image), timestamp_ms,
+                                                cpp_image_processing_options);
 
   if (!cpp_result.ok()) {
     ABSL_LOG(ERROR) << "Data preparation for the landmark detection failed: "
@@ -230,57 +224,31 @@ MP_EXPORT MpHandLandmarkerPtr hand_landmarker_create(
       *options, error_msg);
 }
 
-MP_EXPORT int hand_landmarker_detect_image(MpHandLandmarkerPtr landmarker,
-                                           MpImagePtr image,
-                                           HandLandmarkerResult* result,
-                                           char** error_msg) {
-  return mediapipe::tasks::c::vision::hand_landmarker::CppHandLandmarkerDetect(
-      landmarker, image, /* options= */ nullptr, result, error_msg);
-}
-
-MP_EXPORT int hand_landmarker_detect_image_with_options(
+MP_EXPORT int hand_landmarker_detect_image(
     MpHandLandmarkerPtr landmarker, MpImagePtr image,
-    struct ImageProcessingOptions* options, HandLandmarkerResult* result,
-    char** error_msg) {
-  return mediapipe::tasks::c::vision::hand_landmarker::CppHandLandmarkerDetect(
-      landmarker, image, options, result, error_msg);
-}
-
-MP_EXPORT int hand_landmarker_detect_for_video(MpHandLandmarkerPtr landmarker,
-                                               MpImagePtr image,
-                                               int64_t timestamp_ms,
-                                               HandLandmarkerResult* result,
-                                               char** error_msg) {
-  return mediapipe::tasks::c::vision::hand_landmarker::
-      CppHandLandmarkerDetectForVideo(landmarker, image, /* options= */ nullptr,
-                                      timestamp_ms, result, error_msg);
-}
-
-MP_EXPORT int hand_landmarker_detect_for_video_with_options(
-    MpHandLandmarkerPtr landmarker, MpImagePtr image,
-    struct ImageProcessingOptions* options, int64_t timestamp_ms,
+    const struct ImageProcessingOptions* image_processing_options,
     HandLandmarkerResult* result, char** error_msg) {
+  return mediapipe::tasks::c::vision::hand_landmarker::CppHandLandmarkerDetect(
+      landmarker, image, image_processing_options, result, error_msg);
+}
+
+MP_EXPORT int hand_landmarker_detect_for_video(
+    MpHandLandmarkerPtr landmarker, MpImagePtr image,
+    const struct ImageProcessingOptions* image_processing_options,
+    int64_t timestamp_ms, HandLandmarkerResult* result, char** error_msg) {
   return mediapipe::tasks::c::vision::hand_landmarker::
-      CppHandLandmarkerDetectForVideo(landmarker, image, options, timestamp_ms,
+      CppHandLandmarkerDetectForVideo(landmarker, image,
+                                      image_processing_options, timestamp_ms,
                                       result, error_msg);
 }
 
-MP_EXPORT int hand_landmarker_detect_async(MpHandLandmarkerPtr landmarker,
-                                           MpImagePtr image,
-                                           int64_t timestamp_ms,
-                                           char** error_msg) {
-  return mediapipe::tasks::c::vision::hand_landmarker::
-      CppHandLandmarkerDetectAsync(landmarker, image, /* options= */ nullptr,
-                                   timestamp_ms, error_msg);
-}
-
-MP_EXPORT int hand_landmarker_detect_async_with_options(
+MP_EXPORT int hand_landmarker_detect_async(
     MpHandLandmarkerPtr landmarker, MpImagePtr image,
-    struct ImageProcessingOptions* options, int64_t timestamp_ms,
-    char** error_msg) {
+    const struct ImageProcessingOptions* image_processing_options,
+    int64_t timestamp_ms, char** error_msg) {
   return mediapipe::tasks::c::vision::hand_landmarker::
-      CppHandLandmarkerDetectAsync(landmarker, image, options, timestamp_ms,
-                                   error_msg);
+      CppHandLandmarkerDetectAsync(landmarker, image, image_processing_options,
+                                   timestamp_ms, error_msg);
 }
 
 MP_EXPORT void hand_landmarker_close_result(HandLandmarkerResult* result) {

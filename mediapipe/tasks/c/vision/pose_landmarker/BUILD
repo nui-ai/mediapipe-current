@@ -25,6 +25,7 @@ cc_library(
     deps = [
         "//mediapipe/tasks/c/components/containers:landmark",
         "//mediapipe/tasks/c/vision/core:common",
+        "//mediapipe/tasks/c/vision/core:image",
     ],
 )
 
@@ -34,9 +35,11 @@ cc_library(
     hdrs = ["pose_landmarker_result_converter.h"],
     deps = [
         ":pose_landmarker_result",
+        "//mediapipe/framework/formats:image",
         "//mediapipe/tasks/c/components/containers:landmark",
         "//mediapipe/tasks/c/components/containers:landmark_converter",
-        "//mediapipe/tasks/c/vision/core:common",
+        "//mediapipe/tasks/c/vision/core:image",
+        "//mediapipe/tasks/c/vision/core:image_frame_util",
         "//mediapipe/tasks/cc/components/containers:landmark",
         "//mediapipe/tasks/cc/vision/pose_landmarker:pose_landmarker_result",
     ],
@@ -77,6 +80,8 @@ POSE_LANDMARKER_DEPS = [
     "//mediapipe/framework/formats:image",
     "//mediapipe/tasks/c/core:base_options",
     "//mediapipe/tasks/c/core:base_options_converter",
+    "//mediapipe/tasks/c/core:mp_status",
+    "//mediapipe/tasks/c/core:mp_status_converter",
     "//mediapipe/tasks/c/vision/core:common",
     "//mediapipe/tasks/c/vision/core:image",
     "//mediapipe/tasks/c/vision/core:image_frame_util",
@@ -126,9 +131,10 @@ cc_test(
         "//mediapipe/tasks/c/vision/core:common",
         "//mediapipe/tasks/c/vision/core:image",
         "//mediapipe/tasks/c/vision/core:image_frame_util",
-        "//mediapipe/tasks/cc/vision/utils:image_utils",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest_main",
     ],
 )

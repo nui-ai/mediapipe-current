@@ -21,6 +21,7 @@ licenses(["notice"])
 
 cc_library(
     name = "common",
+    srcs = ["common.cc"],
     hdrs = ["common.h"],
 )
 
@@ -32,6 +33,7 @@ cc_library(
 )
 
 IMAGE_DEPS = [
+    ":common",
     ":image_frame_util",
     "@com_google_absl//absl/log:absl_log",
     "@com_google_absl//absl/status",
@@ -66,14 +68,20 @@ cc_test(
     ],
     deps = [
         ":image",
+        ":image_frame_util",
         ":image_test_util",
         "//mediapipe/framework/deps:file_path",
+        "//mediapipe/framework/formats:image",
         "//mediapipe/framework/port:gtest",
         "//mediapipe/tasks/c/core:mp_status",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
-    ],
+    ] + select({
+        "//mediapipe/gpu:disable_gpu": [],
+        "//conditions:default": [
+        ],
+    }),
 )
 
 cc_library(

@@ -16,8 +16,11 @@ limitations under the License.
 #ifndef MEDIAPIPE_TASKS_C_VISION_FACE_DETECTOR_FACE_DETECTOR_H_
 #define MEDIAPIPE_TASKS_C_VISION_FACE_DETECTOR_FACE_DETECTOR_H_
 
+#include <cstdint>
+
 #include "mediapipe/tasks/c/components/containers/detection_result.h"
 #include "mediapipe/tasks/c/core/base_options.h"
+#include "mediapipe/tasks/c/core/mp_status.h"
 #include "mediapipe/tasks/c/vision/core/common.h"
 #include "mediapipe/tasks/c/vision/core/image.h"
 
@@ -63,40 +66,26 @@ struct FaceDetectorOptions {
   // message in case of any failure. The validity of the passed arguments is
   // true for the lifetime of the callback function.
   //
-  // The passed `image` is only valid for the lifetime of the call. A caller is
-  // responsible for closing the face detector result.
-  typedef void (*result_callback_fn)(FaceDetectorResult* result,
+  // The passed arguments are only valid for the lifetime of the callback.
+  typedef void (*result_callback_fn)(MpStatus status,
+                                     const FaceDetectorResult* result,
                                      const MpImagePtr image,
-                                     int64_t timestamp_ms, char* error_msg);
+                                     int64_t timestamp_ms);
   result_callback_fn result_callback;
 };
 
 // Creates an FaceDetector from the provided `options`.
-// Returns a pointer to the face detector on success.
-// If an error occurs, returns `nullptr` and sets the error parameter to an
-// an error message (if `error_msg` is not `nullptr`). You must free the memory
-// allocated for the error message.
-MP_EXPORT MpFaceDetectorPtr
-face_detector_create(struct FaceDetectorOptions* options, char** error_msg);
+// If successful, returns `kMpOk` and sets `*detector` to the new
+// `MpFaceDetectorPtr`.
+MP_EXPORT MpStatus MpFaceDetectorCreate(struct FaceDetectorOptions* options,
+                                        MpFaceDetectorPtr* detector);
 
-// Performs face detection on the input `image`. Returns `0` on
-// success. If an error occurs, returns an error code and sets the error
-// parameter to an an error message (if `error_msg` is not `nullptr`). You must
-// free the memory allocated for the error message.
-MP_EXPORT int face_detector_detect_image(MpFaceDetectorPtr detector,
-                                         MpImagePtr image,
-                                         FaceDetectorResult* result,
-                                         char** error_msg);
-
-// Performs face detection on the input `image` after applying the
-// image processing options. Returns `0` on success. If an error occurs,
-// returns an error code and sets the error parameter to an an error message (if
-// `error_msg` is not `nullptr`). You must free the memory allocated for the
-// error message.
-MP_EXPORT int face_detector_detect_image_with_options(
+// Performs face detection on the input `image`.
+// If successful, returns `kMpOk` and sets `*result` to the new
+// `FaceDetectorResult`.
+MP_EXPORT MpStatus MpFaceDetectorDetectImage(
     MpFaceDetectorPtr detector, MpImagePtr image,
-    struct ImageProcessingOptions* options, FaceDetectorResult* result,
-    char** error_msg);
+    const struct ImageProcessingOptions* options, FaceDetectorResult* result);
 
 // Performs face detection on the provided video frame.
 // Only use this method when the FaceDetector is created with the video
@@ -104,29 +93,12 @@ MP_EXPORT int face_detector_detect_image_with_options(
 // The image can be of any size with format RGB or RGBA. It's required to
 // provide the video frame's timestamp (in milliseconds). The input timestamps
 // must be monotonically increasing.
-// If an error occurs, returns an error code and sets the error parameter to an
-// an error message (if `error_msg` is not `nullptr`). You must free the memory
-// allocated for the error message.
-MP_EXPORT int face_detector_detect_for_video(MpFaceDetectorPtr detector,
-                                             MpImagePtr image,
-                                             int64_t timestamp_ms,
-                                             FaceDetectorResult* result,
-                                             char** error_msg);
-
-// Performs face detection on the provided video frame after applying the
-// image processing options.
-// Only use this method when the FaceDetector is created with the video
-// running mode.
-// The image can be of any size with format RGB or RGBA. It's required to
-// provide the video frame's timestamp (in milliseconds). The input timestamps
-// must be monotonically increasing.
-// If an error occurs, returns an error code and sets the error parameter to an
-// an error message (if `error_msg` is not `nullptr`). You must free the memory
-// allocated for the error message.
-MP_EXPORT int face_detector_detect_for_video_with_options(
-    MpFaceDetectorPtr detector, MpImagePtr image,
-    struct ImageProcessingOptions* options, int64_t timestamp_ms,
-    FaceDetectorResult* result, char** error_msg);
+// If successful, returns `kMpOk` and sets `*result` to the new
+// `FaceDetectorResult`.
+MP_EXPORT MpStatus
+MpFaceDetectorDetectForVideo(MpFaceDetectorPtr detector, MpImagePtr image,
+                             const struct ImageProcessingOptions* options,
+                             int64_t timestamp_ms, FaceDetectorResult* result);
 
 // Sends live image data to face detection, and the results will be
 // available via the `result_callback` provided in the FaceDetectorOptions.
@@ -143,48 +115,18 @@ MP_EXPORT int face_detector_detect_for_video_with_options(
 //     longer be valid when the callback returns. To access the image data
 //     outside of the callback, callers need to make a copy of the image.
 //   - The input timestamp in milliseconds.
-// If an error occurs, returns an error code and sets the error parameter to an
-// an error message (if `error_msg` is not `nullptr`). You must free the memory
-// allocated for the error message.
-// You need to invoke `face_detector_close_result` after each invocation to
-// free memory.
-MP_EXPORT int face_detector_detect_async(MpFaceDetectorPtr detector,
-                                         MpImagePtr image, int64_t timestamp_ms,
-                                         char** error_msg);
-
-// Sends live image data to face detection after applying the image
-// processing options. The results will be available via the `result_callback`
-// provided in the FaceDetectorOptions. Only use this method when the
-// FaceDetector is created with the live stream running mode. The image can be
-// of any size with format RGB or RGBA. It's required to provide a timestamp (in
-// milliseconds) to indicate when the input image is sent to the face detector.
-// The input timestamps must be monotonically increasing. The `result_callback`
-// provides:
-//   - The recognition results as an FaceDetectorResult object.
-//   - The const reference to the corresponding input image that the face
-//     detector runs on. Note that the const reference to the image will no
-//     longer be valid when the callback returns. To access the image data
-//     outside of the callback, callers need to make a copy of the image.
-//   - The input timestamp in milliseconds.
-// If an error occurs, returns an error code and sets the error parameter to an
-// an error message (if `error_msg` is not `nullptr`). You must free the memory
-// allocated for the error message.
-// You need to invoke `face_detector_close_result` after each invocation to
-// free memory.
-MP_EXPORT int face_detector_detect_async_with_options(
+// Returns `kMpOk` on success. You need to invoke `MpFaceDetectorCloseResult`
+// after each invocation to free memory.
+MP_EXPORT MpStatus MpFaceDetectorDetectAsync(
     MpFaceDetectorPtr detector, MpImagePtr image,
-    struct ImageProcessingOptions* options, int64_t timestamp_ms,
-    char** error_msg);
+    const struct ImageProcessingOptions* options, int64_t timestamp_ms);
 
 // Frees the memory allocated inside a FaceDetectorResult result.
 // Does not free the result pointer itself.
-MP_EXPORT void face_detector_close_result(FaceDetectorResult* result);
+MP_EXPORT void MpFaceDetectorCloseResult(FaceDetectorResult* result);
 
-// Frees face detector.
-// If an error occurs, returns an error code and sets the error parameter to an
-// an error message (if `error_msg` is not `nullptr`). You must free the memory
-// allocated for the error message.
-MP_EXPORT int face_detector_close(MpFaceDetectorPtr detector, char** error_msg);
+// Frees face detector. Returns `kMpOk` on success.
+MP_EXPORT MpStatus MpFaceDetectorClose(MpFaceDetectorPtr detector);
 
 #ifdef __cplusplus
 }  // extern C

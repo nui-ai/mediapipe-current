@@ -22,12 +22,15 @@ limitations under the License.
 
 #include "absl/flags/flag.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/blocking_counter.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "mediapipe/framework/deps/file_path.h"
-#include "mediapipe/framework/port/gmock.h"
 #include "mediapipe/framework/port/gtest.h"
 #include "mediapipe/tasks/c/components/containers/detection_result.h"
 #include "mediapipe/tasks/c/components/containers/keypoint.h"
 #include "mediapipe/tasks/c/components/containers/rect.h"
+#include "mediapipe/tasks/c/core/mp_status.h"
 #include "mediapipe/tasks/c/vision/core/common.h"
 #include "mediapipe/tasks/c/vision/core/image.h"
 #include "mediapipe/tasks/c/vision/core/image_processing_options.h"
@@ -38,7 +41,6 @@ namespace {
 using ::mediapipe::file::JoinPath;
 using ::mediapipe::tasks::vision::core::GetImage;
 using ::mediapipe::tasks::vision::core::ScopedMpImage;
-using ::testing::HasSubstr;
 
 constexpr char kTestDataDirectory[] = "/mediapipe/tasks/testdata/vision/";
 constexpr char kModelName[] = "face_detection_short_range.tflite";
@@ -46,8 +48,9 @@ constexpr char kImageFile[] = "portrait.jpg";
 constexpr char kImageRotatedFile[] = "portrait_rotated.jpg";
 constexpr int kPixelDiffTolerance = 5;
 constexpr float kKeypointErrorThreshold = 0.02;
-constexpr int kIterations = 100;
+constexpr int kIterations = 5;
 constexpr int kKeypointCount = 2;
+constexpr int kSleepBetweenFramesMilliseconds = 100;
 
 // Expected results for portrait.jpg
 const NormalizedKeypoint kExpectedKeypoints[] = {
@@ -82,6 +85,7 @@ void AssertFaceDetectorResult(const FaceDetectorResult* result,
                               const Detection& expected_detection,
                               const int pixel_diff_tolerance,
                               const float keypoint_error_threshold) {
+  ASSERT_NE(result, nullptr);
   EXPECT_EQ(result->detections_count, 1);
   const auto& actual_bbox = result->detections[0].bounding_box;
   const auto& expected_bbox = expected_detection.bounding_box;
@@ -98,62 +102,50 @@ void AssertFaceDetectorResult(const FaceDetectorResult* result,
   }
 }
 
-void AssertFaceDetectorResult(const FaceDetectorResult* result,
-                              const int error_code,
-                              const Detection& expected_detection,
-                              const int pixel_diff_tolerance,
-                              const float keypoint_error_threshold) {
-  EXPECT_EQ(error_code, 0);
-  AssertFaceDetectorResult(result, expected_detection, pixel_diff_tolerance,
-                           keypoint_error_threshold);
-}
-
 TEST(FaceDetectorTest, ImageModeTest) {
   const auto image = GetImage(GetFullPath(kImageFile));
 
   const std::string model_path = GetFullPath(kModelName);
   FaceDetectorOptions options = {
-      /* base_options= */ {/* model_asset_buffer= */ nullptr,
-                           /* model_asset_buffer_count= */ 0,
-                           /* model_asset_path= */ model_path.c_str()},
-      /* running_mode= */ RunningMode::IMAGE,
-      /* min_detection_confidence= */ 0.5,
-      /* min_suppression_threshold= */ 0.5,
+      .base_options = {.model_asset_path = model_path.c_str()},
+      .running_mode = RunningMode::IMAGE,
+      .min_detection_confidence = 0.5,
+      .min_suppression_threshold = 0.5,
   };
 
-  MpFaceDetectorPtr detector =
-      face_detector_create(&options, /* error_msg */ nullptr);
+  MpFaceDetectorPtr detector;
+  EXPECT_EQ(MpFaceDetectorCreate(&options, &detector), kMpOk);
   EXPECT_NE(detector, nullptr);
 
   FaceDetectorResult result;
-  int error_code = face_detector_detect_image(detector, image.get(), &result,
-                                              /* error_msg */ nullptr);
+  EXPECT_EQ(MpFaceDetectorDetectImage(detector, image.get(),
+                                      /* image_processing_options */ nullptr,
+                                      &result),
+            kMpOk);
 
   Detection expected_detection = CreateExpectedDetection(
       kExpectedBoundingBox, kExpectedKeypoints, kKeypointCount);
 
-  AssertFaceDetectorResult(&result, error_code, expected_detection,
-                           kPixelDiffTolerance, kKeypointErrorThreshold);
+  AssertFaceDetectorResult(&result, expected_detection, kPixelDiffTolerance,
+                           kKeypointErrorThreshold);
 
-  face_detector_close_result(&result);
-  face_detector_close(detector, /* error_msg */ nullptr);
+  MpFaceDetectorCloseResult(&result);
+  EXPECT_EQ(MpFaceDetectorClose(detector), kMpOk);
 }
 
-TEST(FaceDetectorTest, ImageModeWithImageProcessingOptionsTest) {
+TEST(FaceDetectorTest, ImageModeWithRotationTest) {
   const auto image = GetImage(GetFullPath(kImageRotatedFile));
 
   const std::string model_path = GetFullPath(kModelName);
   FaceDetectorOptions options = {
-      /* base_options= */ {/* model_asset_buffer= */ nullptr,
-                           /* model_asset_buffer_count= */ 0,
-                           /* model_asset_path= */ model_path.c_str()},
-      /* running_mode= */ RunningMode::IMAGE,
-      /* min_detection_confidence= */ 0.5,
-      /* min_suppression_threshold= */ 0.5,
+      .base_options = {.model_asset_path = model_path.c_str()},
+      .running_mode = RunningMode::IMAGE,
+      .min_detection_confidence = 0.5,
+      .min_suppression_threshold = 0.5,
   };
 
-  MpFaceDetectorPtr detector =
-      face_detector_create(&options, /* error_msg */ nullptr);
+  MpFaceDetectorPtr detector;
+  EXPECT_EQ(MpFaceDetectorCreate(&options, &detector), kMpOk);
   EXPECT_NE(detector, nullptr);
 
   ImageProcessingOptions image_processing_options;
@@ -161,17 +153,17 @@ TEST(FaceDetectorTest, ImageModeWithImageProcessingOptionsTest) {
   image_processing_options.rotation_degrees = -90;
 
   FaceDetectorResult result;
-  int error_code = face_detector_detect_image_with_options(
-      detector, image.get(), &image_processing_options, &result,
-      /* error_msg */ nullptr);
+  EXPECT_EQ(MpFaceDetectorDetectImage(detector, image.get(),
+                                      &image_processing_options, &result),
+            kMpOk);
 
   Detection expected_detection = CreateExpectedDetection(
       kExpectedRotatedBoundingBox, kExpectedRotatedKeypoints, kKeypointCount);
-  AssertFaceDetectorResult(&result, error_code, expected_detection,
-                           kPixelDiffTolerance, kKeypointErrorThreshold);
+  AssertFaceDetectorResult(&result, expected_detection, kPixelDiffTolerance,
+                           kKeypointErrorThreshold);
 
-  face_detector_close_result(&result);
-  face_detector_close(detector, /* error_msg */ nullptr);
+  MpFaceDetectorCloseResult(&result);
+  EXPECT_EQ(MpFaceDetectorClose(detector), kMpOk);
 }
 
 TEST(FaceDetectorTest, VideoModeTest) {
@@ -179,30 +171,29 @@ TEST(FaceDetectorTest, VideoModeTest) {
 
   const std::string model_path = GetFullPath(kModelName);
   FaceDetectorOptions options = {
-      /* base_options= */ {/* model_asset_buffer= */ nullptr,
-                           /* model_asset_buffer_count= */ 0,
-                           /* model_asset_path= */ model_path.c_str()},
-      /* running_mode= */ RunningMode::VIDEO,
-      /* min_detection_confidence= */ 0.5,
-      /* min_suppression_threshold= */ 0.5,
+      .base_options = {.model_asset_path = model_path.c_str()},
+      .running_mode = RunningMode::VIDEO,
+      .min_detection_confidence = 0.5,
+      .min_suppression_threshold = 0.5,
   };
 
-  MpFaceDetectorPtr detector = face_detector_create(&options,
-                                                    /* error_msg */ nullptr);
+  MpFaceDetectorPtr detector;
+  EXPECT_EQ(MpFaceDetectorCreate(&options, &detector), kMpOk);
   EXPECT_NE(detector, nullptr);
 
   Detection expected_detection = CreateExpectedDetection(
       kExpectedBoundingBox, kExpectedKeypoints, kKeypointCount);
   for (int i = 0; i < kIterations; ++i) {
     FaceDetectorResult result;
-    int error_code =
-        face_detector_detect_for_video(detector, image.get(), i, &result,
-                                       /* error_msg */ nullptr);
-    AssertFaceDetectorResult(&result, error_code, expected_detection,
-                             kPixelDiffTolerance, kKeypointErrorThreshold);
-    face_detector_close_result(&result);
+    EXPECT_EQ(MpFaceDetectorDetectForVideo(
+                  detector, image.get(),
+                  /* image_processing_options */ nullptr, i, &result),
+              kMpOk);
+    AssertFaceDetectorResult(&result, expected_detection, kPixelDiffTolerance,
+                             kKeypointErrorThreshold);
+    MpFaceDetectorCloseResult(&result);
   }
-  face_detector_close(detector, /* error_msg */ nullptr);
+  EXPECT_EQ(MpFaceDetectorClose(detector), kMpOk);
 }
 
 // A structure to support LiveStreamModeTest below. This structure holds a
@@ -212,10 +203,11 @@ TEST(FaceDetectorTest, VideoModeTest) {
 // timestamp is greater than the previous one.
 struct LiveStreamModeCallback {
   static int64_t last_timestamp;
-  static void Fn(FaceDetectorResult* detector_result, const MpImagePtr image,
-                 int64_t timestamp, char* error_msg) {
+  static absl::BlockingCounter* blocking_counter;
+  static void Fn(MpStatus status, const FaceDetectorResult* detector_result,
+                 const MpImagePtr image, int64_t timestamp) {
+    ASSERT_EQ(status, kMpOk);
     ASSERT_NE(detector_result, nullptr);
-    ASSERT_EQ(error_msg, nullptr);
     Detection expected_detection = CreateExpectedDetection(
         kExpectedBoundingBox, kExpectedKeypoints, kKeypointCount);
     AssertFaceDetectorResult(detector_result, expected_detection,
@@ -225,37 +217,48 @@ struct LiveStreamModeCallback {
     EXPECT_GT(timestamp, last_timestamp);
     ++last_timestamp;
 
-    face_detector_close_result(detector_result);
+    if (blocking_counter) {
+      blocking_counter->DecrementCount();
+    }
   }
 };
 int64_t LiveStreamModeCallback::last_timestamp = -1;
+absl::BlockingCounter* LiveStreamModeCallback::blocking_counter = nullptr;
 
-// TODO: Await the callbacks and re-enable test
-TEST(FaceDetectorTest, DISABLED_LiveStreamModeTest) {
+TEST(FaceDetectorTest, LiveStreamModeTest) {
   const auto image = GetImage(GetFullPath(kImageFile));
 
   const std::string model_path = GetFullPath(kModelName);
 
   FaceDetectorOptions options = {
-      /* base_options= */ {/* model_asset_buffer= */ nullptr,
-                           /* model_asset_buffer_count= */ 0,
-                           /* model_asset_path= */ model_path.c_str()},
-      /* running_mode= */ RunningMode::LIVE_STREAM,
-      /* min_detection_confidence= */ 0.5,
-      /* min_suppression_threshold= */ 0.5,
-      /* result_callback= */ LiveStreamModeCallback::Fn,
+      .base_options = {.model_asset_path = model_path.c_str()},
+      .running_mode = RunningMode::LIVE_STREAM,
+      .min_detection_confidence = 0.5,
+      .min_suppression_threshold = 0.5,
+      .result_callback = LiveStreamModeCallback::Fn,
   };
 
-  MpFaceDetectorPtr detector = face_detector_create(&options, /* error_msg */
-                                                    nullptr);
+  MpFaceDetectorPtr detector;
+  EXPECT_EQ(MpFaceDetectorCreate(&options, &detector), kMpOk);
   EXPECT_NE(detector, nullptr);
 
+  absl::BlockingCounter counter(kIterations);
+  LiveStreamModeCallback::blocking_counter = &counter;
+
   for (int i = 0; i < kIterations; ++i) {
-    EXPECT_GE(face_detector_detect_async(detector, image.get(), i,
-                                         /* error_msg */ nullptr),
-              0);
+    EXPECT_EQ(
+        MpFaceDetectorDetectAsync(detector, image.get(),
+                                  /* image_processing_options */ nullptr, i),
+        kMpOk);
+    // Short sleep so that MediaPipe does not drop frames.
+    absl::SleepFor(absl::Milliseconds(kSleepBetweenFramesMilliseconds));
   }
-  face_detector_close(detector, /* error_msg */ nullptr);
+
+  // Wait for all callbacks to be invoked.
+  counter.Wait();
+  LiveStreamModeCallback::blocking_counter = nullptr;
+
+  EXPECT_EQ(MpFaceDetectorClose(detector), kMpOk);
 
   // Due to the flow limiter, the total of outputs might be smaller than the
   // number of iterations.
@@ -266,21 +269,15 @@ TEST(FaceDetectorTest, DISABLED_LiveStreamModeTest) {
 TEST(FaceDetectorTest, InvalidArgumentHandling) {
   // It is an error to set neither the asset buffer nor the path.
   FaceDetectorOptions options = {
-      /* base_options= */ {/* model_asset_buffer= */ nullptr,
-                           /* model_asset_buffer_count= */ 0,
-                           /* model_asset_path= */ nullptr},
-      /* running_mode= */ RunningMode::IMAGE,
-      /* min_detection_confidence= */ 0.5,
-      /* min_suppression_threshold= */ 0.5,
+      .base_options = {.model_asset_path = nullptr},
+      .running_mode = RunningMode::IMAGE,
+      .min_detection_confidence = 0.5,
+      .min_suppression_threshold = 0.5,
   };
 
-  char* error_msg;
-  MpFaceDetectorPtr detector = face_detector_create(&options, &error_msg);
+  MpFaceDetectorPtr detector = nullptr;
+  EXPECT_EQ(MpFaceDetectorCreate(&options, &detector), kMpInvalidArgument);
   EXPECT_EQ(detector, nullptr);
-
-  EXPECT_THAT(error_msg, HasSubstr("INVALID_ARGUMENT"));
-
-  free(error_msg);
 }
 
 }  // namespace

@@ -22,10 +22,14 @@ limitations under the License.
 
 #include "absl/flags/flag.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/blocking_counter.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "mediapipe/framework/deps/file_path.h"
 #include "mediapipe/framework/port/gmock.h"
 #include "mediapipe/framework/port/gtest.h"
 #include "mediapipe/tasks/c/components/containers/category.h"
+#include "mediapipe/tasks/c/core/mp_status.h"
 #include "mediapipe/tasks/c/vision/core/common.h"
 #include "mediapipe/tasks/c/vision/core/image.h"
 #include "mediapipe/tasks/c/vision/core/image_processing_options.h"
@@ -44,7 +48,8 @@ constexpr char kImageRotatedFile[] = "cats_and_dogs_rotated.jpg";
 constexpr char kModelName[] =
     "coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.tflite";
 constexpr float kPrecision = 1e-4;
-constexpr int kIterations = 100;
+constexpr int kIterations = 5;
+constexpr int kSleepBetweenFramesMilliseconds = 100;
 
 std::string GetFullPath(absl::string_view file_name) {
   return JoinPath("./", kTestDataDirectory, file_name);
@@ -73,8 +78,9 @@ TEST(ObjectDetectorTest, ImageModeTest) {
   EXPECT_NE(detector, nullptr);
 
   ObjectDetectorResult result;
-  int error_code = object_detector_detect_image(detector, image.get(), &result,
-                                                /* error_msg */ nullptr);
+  int error_code = object_detector_detect_image(
+      detector, image.get(), /* image_processing_options= */ nullptr, &result,
+      /* error_msg */ nullptr);
   EXPECT_EQ(error_code, 0);
   EXPECT_EQ(result.detections_count, 10);
   EXPECT_EQ(result.detections[0].categories_count, 1);
@@ -85,7 +91,7 @@ TEST(ObjectDetectorTest, ImageModeTest) {
   object_detector_close(detector, /* error_msg */ nullptr);
 }
 
-TEST(ObjectDetectorTest, ImageModeWithOptionsTest) {
+TEST(ObjectDetectorTest, ImageModeWithRotationTest) {
   const auto image = GetImage(GetFullPath(kImageRotatedFile));
 
   const std::string model_path = GetFullPath(kModelName);
@@ -112,7 +118,7 @@ TEST(ObjectDetectorTest, ImageModeWithOptionsTest) {
   image_processing_options.rotation_degrees = -90;
 
   ObjectDetectorResult result;
-  int error_code = object_detector_detect_image_with_options(
+  int error_code = object_detector_detect_image(
       detector, image.get(), &image_processing_options, &result,
       /* error_msg */ nullptr);
   EXPECT_EQ(error_code, 0);
@@ -149,9 +155,10 @@ TEST(ObjectDetectorTest, VideoModeTest) {
 
   for (int i = 0; i < kIterations; ++i) {
     ObjectDetectorResult result;
-    int error_code =
-        object_detector_detect_for_video(detector, image.get(), i, &result,
-                                         /* error_msg */ nullptr);
+    int error_code = object_detector_detect_for_video(
+        detector, image.get(), /* image_processing_options= */ nullptr, i,
+        &result,
+        /* error_msg */ nullptr);
     EXPECT_EQ(error_code, 0);
     EXPECT_EQ(result.detections_count, 3);
     EXPECT_EQ(result.detections[0].categories_count, 1);
@@ -170,10 +177,11 @@ TEST(ObjectDetectorTest, VideoModeTest) {
 // timestamp is greater than the previous one.
 struct LiveStreamModeCallback {
   static int64_t last_timestamp;
-  static void Fn(ObjectDetectorResult* detector_result, MpImagePtr image,
-                 int64_t timestamp, char* error_msg) {
+  static absl::BlockingCounter* blocking_counter;
+  static void Fn(MpStatus status, const ObjectDetectorResult* detector_result,
+                 MpImagePtr image, int64_t timestamp) {
+    ASSERT_EQ(status, kMpOk);
     ASSERT_NE(detector_result, nullptr);
-    ASSERT_EQ(error_msg, nullptr);
     EXPECT_EQ(detector_result->detections_count, 3);
     EXPECT_EQ(detector_result->detections[0].categories_count, 1);
     EXPECT_EQ(
@@ -186,13 +194,15 @@ struct LiveStreamModeCallback {
     EXPECT_GT(timestamp, last_timestamp);
     last_timestamp++;
 
-    object_detector_close_result(detector_result);
+    if (blocking_counter) {
+      blocking_counter->DecrementCount();
+    }
   }
 };
 int64_t LiveStreamModeCallback::last_timestamp = -1;
+absl::BlockingCounter* LiveStreamModeCallback::blocking_counter = nullptr;
 
-// TODO: Await the callbacks and re-enable test
-TEST(ObjectDetectorTest, DISABLED_LiveStreamModeTest) {
+TEST(ObjectDetectorTest, LiveStreamModeTest) {
   const auto image = GetImage(GetFullPath(kImageFile));
 
   const std::string model_path = GetFullPath(kModelName);
@@ -217,11 +227,23 @@ TEST(ObjectDetectorTest, DISABLED_LiveStreamModeTest) {
                              nullptr);
   EXPECT_NE(detector, nullptr);
 
+  absl::BlockingCounter counter(kIterations);
+  LiveStreamModeCallback::blocking_counter = &counter;
+
   for (int i = 0; i < kIterations; ++i) {
-    EXPECT_GE(object_detector_detect_async(detector, image.get(), i,
-                                           /* error_msg */ nullptr),
-              0);
+    EXPECT_GE(
+        object_detector_detect_async(detector, image.get(),
+                                     /* image_processing_options= */ nullptr, i,
+                                     /* error_msg */ nullptr),
+        0);
+    // Short sleep so that MediaPipe does not drop frames.
+    absl::SleepFor(absl::Milliseconds(kSleepBetweenFramesMilliseconds));
   }
+
+  // Wait for all callbacks to be invoked.
+  counter.Wait();
+  LiveStreamModeCallback::blocking_counter = nullptr;
+
   object_detector_close(detector, /* error_msg */ nullptr);
 
   // Due to the flow limiter, the total of outputs might be smaller than the

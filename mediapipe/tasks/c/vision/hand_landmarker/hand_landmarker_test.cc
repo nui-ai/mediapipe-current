@@ -21,6 +21,9 @@ limitations under the License.
 
 #include "absl/flags/flag.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/blocking_counter.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "mediapipe/framework/deps/file_path.h"
 #include "mediapipe/framework/formats/classification.pb.h"
 #include "mediapipe/framework/formats/landmark.pb.h"
@@ -30,6 +33,7 @@ limitations under the License.
 #include "mediapipe/framework/port/parse_text_proto.h"
 #include "mediapipe/framework/port/status_matchers.h"
 #include "mediapipe/tasks/c/components/containers/landmark.h"
+#include "mediapipe/tasks/c/core/mp_status.h"
 #include "mediapipe/tasks/c/vision/core/common.h"
 #include "mediapipe/tasks/c/vision/core/image.h"
 #include "mediapipe/tasks/c/vision/core/image_processing_options.h"
@@ -55,7 +59,8 @@ constexpr char kPointingUpRotatedLandmarksFilename[] =
     "pointing_up_rotated_landmarks.pbtxt";
 constexpr float kScorePrecision = 1e-2;
 constexpr float kLandmarkPrecision = 1e-1;
-constexpr int kIterations = 100;
+constexpr int kIterations = 5;
+constexpr int kSleepBetweenFramesMilliseconds = 100;
 
 std::string GetFullPath(absl::string_view file_name) {
   return JoinPath("./", kTestDataDirectory, file_name);
@@ -127,7 +132,8 @@ TEST(HandLandmarkerTest, ImageModeTest) {
   EXPECT_NE(landmarker, nullptr);
 
   HandLandmarkerResult result;
-  hand_landmarker_detect_image(landmarker, image.get(), &result,
+  hand_landmarker_detect_image(landmarker, image.get(),
+                               /* image_processing_options= */ nullptr, &result,
                                /* error_msg */ nullptr);
 
   LandmarksDetectionResult expected_landmarks =
@@ -138,7 +144,7 @@ TEST(HandLandmarkerTest, ImageModeTest) {
   hand_landmarker_close(landmarker, /* error_msg */ nullptr);
 }
 
-TEST(HandLandmarkerTest, ImageModeWithOptionsTest) {
+TEST(HandLandmarkerTest, ImageModeWithRotationTest) {
   const auto image = GetImage(GetFullPath(kPointingUpRotatedImage));
 
   const std::string model_path = GetFullPath(kModelName);
@@ -162,9 +168,9 @@ TEST(HandLandmarkerTest, ImageModeWithOptionsTest) {
   image_processing_options.rotation_degrees = -90;
 
   HandLandmarkerResult result;
-  hand_landmarker_detect_image_with_options(landmarker, image.get(),
-                                            &image_processing_options, &result,
-                                            /* error_msg */ nullptr);
+  hand_landmarker_detect_image(landmarker, image.get(),
+                               &image_processing_options, &result,
+                               /* error_msg */ nullptr);
 
   LandmarksDetectionResult expected_landmarks =
       GetLandmarksDetectionResult(kPointingUpRotatedLandmarksFilename);
@@ -197,8 +203,9 @@ TEST(HandLandmarkerTest, VideoModeTest) {
       GetLandmarksDetectionResult(kPointingUpLandmarksFilename);
   for (int i = 0; i < kIterations; ++i) {
     HandLandmarkerResult result;
-    hand_landmarker_detect_for_video(landmarker, image.get(), i, &result,
-                                     /* error_msg */ nullptr);
+    hand_landmarker_detect_for_video(landmarker, image.get(),
+                                     /* image_processing_options= */ nullptr, i,
+                                     &result, /* error_msg */ nullptr);
 
     ExpectHandLandmarkerResultsCorrect(&result, expected_landmarks,
                                        kLandmarkPrecision, kScorePrecision);
@@ -214,10 +221,11 @@ TEST(HandLandmarkerTest, VideoModeTest) {
 // timestamp is greater than the previous one.
 struct LiveStreamModeCallback {
   static int64_t last_timestamp;
-  static void Fn(HandLandmarkerResult* landmarker_result, MpImagePtr image,
-                 int64_t timestamp, char* error_msg) {
+  static absl::BlockingCounter* blocking_counter;
+  static void Fn(MpStatus status, const HandLandmarkerResult* landmarker_result,
+                 MpImagePtr image, int64_t timestamp) {
+    ASSERT_EQ(status, kMpOk);
     ASSERT_NE(landmarker_result, nullptr);
-    ASSERT_EQ(error_msg, nullptr);
     LandmarksDetectionResult expected_landmarks =
         GetLandmarksDetectionResult(kPointingUpLandmarksFilename);
     ExpectHandLandmarkerResultsCorrect(landmarker_result, expected_landmarks,
@@ -226,12 +234,16 @@ struct LiveStreamModeCallback {
     EXPECT_GT(MpImageGetHeight(image), 0);
     EXPECT_GT(timestamp, last_timestamp);
     ++last_timestamp;
+
+    if (blocking_counter) {
+      blocking_counter->DecrementCount();
+    }
   }
 };
 int64_t LiveStreamModeCallback::last_timestamp = -1;
+absl::BlockingCounter* LiveStreamModeCallback::blocking_counter = nullptr;
 
-// TODO: Await the callbacks and re-enable test
-TEST(HandLandmarkerTest, DISABLED_LiveStreamModeTest) {
+TEST(HandLandmarkerTest, LiveStreamModeTest) {
   const auto image = GetImage(GetFullPath(kPointingUpImage));
 
   const std::string model_path = GetFullPath(kModelName);
@@ -252,11 +264,23 @@ TEST(HandLandmarkerTest, DISABLED_LiveStreamModeTest) {
       hand_landmarker_create(&options, /* error_msg */ nullptr);
   EXPECT_NE(landmarker, nullptr);
 
+  absl::BlockingCounter counter(kIterations);
+  LiveStreamModeCallback::blocking_counter = &counter;
+
   for (int i = 0; i < kIterations; ++i) {
-    EXPECT_GE(hand_landmarker_detect_async(landmarker, image.get(), i,
-                                           /* error_msg */ nullptr),
-              0);
+    EXPECT_GE(
+        hand_landmarker_detect_async(landmarker, image.get(),
+                                     /* image_processing_options= */ nullptr, i,
+                                     /* error_msg */ nullptr),
+        0);
+    // Short sleep so that MediaPipe does not drop frames.
+    absl::SleepFor(absl::Milliseconds(kSleepBetweenFramesMilliseconds));
   }
+
+  // Wait for all callbacks to be invoked.
+  counter.Wait();
+  LiveStreamModeCallback::blocking_counter = nullptr;
+
   hand_landmarker_close(landmarker, /* error_msg */ nullptr);
 
   // Due to the flow limiter, the total of outputs might be smaller than the

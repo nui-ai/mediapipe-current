@@ -13,51 +13,156 @@
 # limitations under the License.
 """MediaPipe image segmenter task."""
 
+import ctypes
 import dataclasses
-from typing import Callable, List, Mapping, Optional
+from typing import Callable, Optional
 
-from mediapipe.python import packet_creator
-from mediapipe.python import packet_getter
-from mediapipe.python._framework_bindings import image as image_module
-from mediapipe.python._framework_bindings import packet
-from mediapipe.tasks.cc.vision.image_segmenter.calculators import tensors_to_segmentation_calculator_pb2
-from mediapipe.tasks.cc.vision.image_segmenter.proto import image_segmenter_graph_options_pb2
-from mediapipe.tasks.cc.vision.image_segmenter.proto import segmenter_options_pb2
-from mediapipe.tasks.python.components.containers import rect
+from mediapipe.tasks.python.core import async_result_dispatcher
 from mediapipe.tasks.python.core import base_options as base_options_module
-from mediapipe.tasks.python.core import task_info as task_info_module
+from mediapipe.tasks.python.core import base_options_c
+from mediapipe.tasks.python.core import mediapipe_c_bindings
+from mediapipe.tasks.python.core import serial_dispatcher
 from mediapipe.tasks.python.core.optional_dependencies import doc_controls
 from mediapipe.tasks.python.vision.core import base_vision_task_api
+from mediapipe.tasks.python.vision.core import image as image_module
 from mediapipe.tasks.python.vision.core import image_processing_options as image_processing_options_module
+from mediapipe.tasks.python.vision.core import image_processing_options_c
 from mediapipe.tasks.python.vision.core import vision_task_running_mode
 
-_NormalizedRect = rect.NormalizedRect
 _BaseOptions = base_options_module.BaseOptions
-_SegmenterOptionsProto = segmenter_options_pb2.SegmenterOptions
-_ImageSegmenterGraphOptionsProto = (
-    image_segmenter_graph_options_pb2.ImageSegmenterGraphOptions
-)
-TensorsToSegmentationCalculatorOptionsProto = (
-    tensors_to_segmentation_calculator_pb2.TensorsToSegmentationCalculatorOptions
-)
-_RunningMode = vision_task_running_mode.VisionTaskRunningMode
 _ImageProcessingOptions = image_processing_options_module.ImageProcessingOptions
-_TaskInfo = task_info_module.TaskInfo
+_RunningMode = vision_task_running_mode.VisionTaskRunningMode
+_CFunction = mediapipe_c_bindings.CFunction
+_AsyncResultDispatcher = async_result_dispatcher.AsyncResultDispatcher
 
-_CONFIDENCE_MASKS_STREAM_NAME = 'confidence_masks'
-_CONFIDENCE_MASKS_TAG = 'CONFIDENCE_MASKS'
-_CATEGORY_MASK_STREAM_NAME = 'category_mask'
-_CATEGORY_MASK_TAG = 'CATEGORY_MASK'
-_IMAGE_IN_STREAM_NAME = 'image_in'
-_IMAGE_OUT_STREAM_NAME = 'image_out'
-_IMAGE_TAG = 'IMAGE'
-_NORM_RECT_STREAM_NAME = 'norm_rect_in'
-_NORM_RECT_TAG = 'NORM_RECT'
-_TENSORS_TO_SEGMENTATION_CALCULATOR_NAME = (
-    'mediapipe.tasks.TensorsToSegmentationCalculator'
+
+class MpStringListC(ctypes.Structure):
+  _fields_ = [
+      ('strings', ctypes.POINTER(ctypes.c_char_p)),
+      ('num_strings', ctypes.c_int),
+  ]
+
+
+class ImageSegmenterResultC(ctypes.Structure):
+  _fields_ = [
+      ('confidence_masks', ctypes.POINTER(ctypes.c_void_p)),
+      ('confidence_masks_count', ctypes.c_uint32),
+      ('category_mask', ctypes.c_void_p),
+      ('has_category_mask', ctypes.c_uint32),
+      ('quality_scores', ctypes.POINTER(ctypes.c_float)),
+      ('quality_scores_count', ctypes.c_uint32),
+  ]
+
+_C_TYPES_RESULT_CALLBACK = ctypes.CFUNCTYPE(
+    None,
+    ctypes.c_int32,  # MpStatus
+    ctypes.POINTER(ImageSegmenterResultC),
+    ctypes.c_void_p,  # MpImage
+    ctypes.c_int64,  # timestamp_ms
 )
-_TASK_GRAPH_NAME = 'mediapipe.tasks.vision.image_segmenter.ImageSegmenterGraph'
-_MICRO_SECONDS_PER_MILLISECOND = 1000
+
+
+class ImageSegmenterOptionsC(ctypes.Structure):
+  """C types for ImageSegmenterOptions."""
+  _fields_ = [
+      ('base_options', base_options_c.BaseOptionsC),
+      ('running_mode', ctypes.c_int),
+      ('display_names_locale', ctypes.c_char_p),
+      ('output_confidence_masks', ctypes.c_bool),
+      ('output_category_mask', ctypes.c_bool),
+      ('result_callback', _C_TYPES_RESULT_CALLBACK),
+  ]
+
+  @classmethod
+  @doc_controls.do_not_generate_docs
+  def from_c_options(
+      cls,
+      base_options: base_options_c.BaseOptionsC,
+      running_mode: _RunningMode,
+      output_confidence_masks: bool,
+      output_category_mask: bool,
+      result_callback: _C_TYPES_RESULT_CALLBACK,
+  ) -> 'ImageSegmenterOptionsC':
+    """Creates an ImageSegmenterOptionsC object from the given options."""
+    empty_string = ctypes.c_char_p(b'')
+    return cls(
+        base_options=base_options,
+        running_mode=running_mode.ctype,
+        display_names_locale=empty_string,
+        output_confidence_masks=output_confidence_masks,
+        output_category_mask=output_category_mask,
+        result_callback=result_callback,
+    )
+
+
+_CTYPES_SIGNATURES = (
+    _CFunction(
+        'MpImageSegmenterCreate',
+        [
+            ctypes.POINTER(ImageSegmenterOptionsC),
+            ctypes.POINTER(ctypes.c_void_p),  # Output param for segmenter
+        ],
+        ctypes.c_int,  # MpStatus
+    ),
+    _CFunction(
+        'MpImageSegmenterSegmentImage',
+        [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(image_processing_options_c.ImageProcessingOptionsC),
+            ctypes.POINTER(ImageSegmenterResultC),
+        ],
+        ctypes.c_int,  # MpStatus
+    ),
+    _CFunction(
+        'MpImageSegmenterSegmentForVideo',
+        [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(image_processing_options_c.ImageProcessingOptionsC),
+            ctypes.c_int64,
+            ctypes.POINTER(ImageSegmenterResultC),
+        ],
+        ctypes.c_int,  # MpStatus
+    ),
+    _CFunction(
+        'MpImageSegmenterSegmentAsync',
+        [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(image_processing_options_c.ImageProcessingOptionsC),
+            ctypes.c_int64,
+        ],
+        ctypes.c_int,  # MpStatus
+    ),
+    _CFunction(
+        'MpImageSegmenterGetLabels',
+        [
+            ctypes.c_void_p,
+            ctypes.POINTER(MpStringListC),
+        ],
+        ctypes.c_int,  # MpStatus
+    ),
+    _CFunction(
+        'MpImageSegmenterCloseResult',
+        [ctypes.POINTER(ImageSegmenterResultC)],
+        None,
+    ),
+    _CFunction(
+        'MpImageSegmenterClose',
+        [
+            ctypes.c_void_p,
+        ],
+        ctypes.c_int,  # MpStatus
+    ),
+    _CFunction(
+        'MpStringListFree',
+        [
+            ctypes.c_void_p,
+        ],
+        None,
+    ),
+)
 
 
 @dataclasses.dataclass
@@ -71,8 +176,31 @@ class ImageSegmenterResult:
   class which the pixel in the original image was predicted to belong to.
   """
 
-  confidence_masks: Optional[List[image_module.Image]] = None
+  confidence_masks: Optional[list[image_module.Image]] = None
   category_mask: Optional[image_module.Image] = None
+
+  @classmethod
+  @doc_controls.do_not_generate_docs
+  def from_ctypes(
+      cls, c_result: ImageSegmenterResultC
+  ) -> 'ImageSegmenterResult':
+    """Creates an `ImageSegmenterResult` object from the given ctypes struct."""
+    confidence_masks = None
+    category_mask = None
+    if (c_result.confidence_masks_count > 0):
+      confidence_masks = [
+          image_module.Image.create_from_ctypes(c_result.confidence_masks[i])
+          for i in range(c_result.confidence_masks_count)
+      ]
+    if c_result.has_category_mask > 0:
+      category_mask = image_module.Image.create_from_ctypes(
+          c_result.category_mask
+      )
+
+    return cls(
+        confidence_masks=confidence_masks,
+        category_mask=category_mask,
+    )
 
 
 @dataclasses.dataclass
@@ -97,25 +225,12 @@ class ImageSegmenterOptions:
   running_mode: _RunningMode = _RunningMode.IMAGE
   output_confidence_masks: bool = True
   output_category_mask: bool = False
-  result_callback: Optional[
-      Callable[[ImageSegmenterResult, image_module.Image, int], None]
-  ] = None
-
-  @doc_controls.do_not_generate_docs
-  def to_pb2(self) -> _ImageSegmenterGraphOptionsProto:
-    """Generates an ImageSegmenterOptions protobuf object."""
-    base_options_proto = self.base_options.to_pb2()
-    base_options_proto.use_stream_mode = (
-        False if self.running_mode == _RunningMode.IMAGE else True
-    )
-    segmenter_options_proto = _SegmenterOptionsProto()
-    return _ImageSegmenterGraphOptionsProto(
-        base_options=base_options_proto,
-        segmenter_options=segmenter_options_proto,
-    )
+  result_callback: (
+      Callable[[ImageSegmenterResult, image_module.Image, int], None] | None
+  ) = None
 
 
-class ImageSegmenter(base_vision_task_api.BaseVisionTaskApi):
+class ImageSegmenter:
   """Class that performs image segmentation on images.
 
   The API expects a TFLite model with mandatory TFLite Model Metadata.
@@ -140,40 +255,31 @@ class ImageSegmenter(base_vision_task_api.BaseVisionTaskApi):
   https://tfhub.dev/tensorflow/lite-model/deeplabv3/1/metadata/2
   """
 
-  def __init__(self, graph_config, running_mode, packet_callback) -> None:
-    """Initializes the `ImageSegmenter` object."""
-    super(ImageSegmenter, self).__init__(
-        graph_config, running_mode, packet_callback
-    )
-    self._populate_labels()
+  _lib: serial_dispatcher.SerialDispatcher
+  _handle: ctypes.c_void_p
+  _dispatcher: _AsyncResultDispatcher
+  _async_callback: _C_TYPES_RESULT_CALLBACK
 
-  def _populate_labels(self) -> None:
-    """Populate the labelmap in TensorsToSegmentationCalculator to labels field.
+  def __init__(
+      self,
+      lib: serial_dispatcher.SerialDispatcher,
+      handle: ctypes.c_void_p,
+      dispatcher: _AsyncResultDispatcher,
+      async_callback: _C_TYPES_RESULT_CALLBACK,
+  ) -> None:
+    """Initializes the `ImageSegmenter` object.
 
-    Raises:
-      ValueError if there is an error during finding
-      TensorsToSegmentationCalculator.
+    Args:
+      lib: The dispatch library to use for the image segmenter.
+      handle: The C pointer to the image segmenter.
+      dispatcher: The async result handler for the image segmenter.
+      async_callback: The c callback for the image segmenter.
     """
-    self._labels = []
-    graph_config = self._runner.get_graph_config()
-    found_tensors_to_segmentation = False
-
-    for node in graph_config.node:
-      if _TENSORS_TO_SEGMENTATION_CALCULATOR_NAME in node.name:
-        if found_tensors_to_segmentation:
-          raise ValueError(
-              'The graph has more than one '
-              f'{_TENSORS_TO_SEGMENTATION_CALCULATOR_NAME}.'
-          )
-        found_tensors_to_segmentation = True
-        options = node.options.Extensions[
-            TensorsToSegmentationCalculatorOptionsProto.ext
-        ]
-        if options.label_items:
-          for i in range(len(options.label_items)):
-            if i not in options.label_items:
-              raise ValueError(f'The labelmap has no expected key: {i}.')
-            self._labels.append(options.label_items[i].name)
+    self._lib = lib
+    self._handle = handle
+    self._dispatcher = dispatcher
+    self._async_callback = async_callback
+    self._labels = None
 
   @classmethod
   def create_from_model_path(cls, model_path: str) -> 'ImageSegmenter':
@@ -218,60 +324,44 @@ class ImageSegmenter(base_vision_task_api.BaseVisionTaskApi):
       RuntimeError: If other types of error occurred.
     """
 
-    def packets_callback(output_packets: Mapping[str, packet.Packet]):
-      if output_packets[_IMAGE_OUT_STREAM_NAME].is_empty():
-        return
-
-      segmentation_result = ImageSegmenterResult()
-
-      if options.output_confidence_masks:
-        segmentation_result.confidence_masks = packet_getter.get_image_list(
-            output_packets[_CONFIDENCE_MASKS_STREAM_NAME]
-        )
-
-      if options.output_category_mask:
-        segmentation_result.category_mask = packet_getter.get_image(
-            output_packets[_CATEGORY_MASK_STREAM_NAME]
-        )
-
-      image = packet_getter.get_image(output_packets[_IMAGE_OUT_STREAM_NAME])
-      timestamp = output_packets[_IMAGE_OUT_STREAM_NAME].timestamp
-      options.result_callback(
-          segmentation_result,
-          image,
-          timestamp.value // _MICRO_SECONDS_PER_MILLISECOND,
-      )
-
-    output_streams = [
-        ':'.join([_IMAGE_TAG, _IMAGE_OUT_STREAM_NAME]),
-    ]
-
-    if options.output_confidence_masks:
-      output_streams.append(
-          ':'.join([_CONFIDENCE_MASKS_TAG, _CONFIDENCE_MASKS_STREAM_NAME])
-      )
-
-    if options.output_category_mask:
-      output_streams.append(
-          ':'.join([_CATEGORY_MASK_TAG, _CATEGORY_MASK_STREAM_NAME])
-      )
-
-    task_info = _TaskInfo(
-        task_graph=_TASK_GRAPH_NAME,
-        input_streams=[
-            ':'.join([_IMAGE_TAG, _IMAGE_IN_STREAM_NAME]),
-            ':'.join([_NORM_RECT_TAG, _NORM_RECT_STREAM_NAME]),
-        ],
-        output_streams=output_streams,
-        task_options=options,
+    base_vision_task_api.validate_running_mode(
+        options.running_mode, options.result_callback
     )
+
+    lib = mediapipe_c_bindings.load_shared_library(_CTYPES_SIGNATURES)
+
+    def convert_result(
+        c_result_ptr: ctypes.POINTER(ImageSegmenterResultC),
+        image_ptr: ctypes.c_void_p,
+        timestamp_ms: int,
+    ) -> tuple[ImageSegmenterResult, image_module.Image, int]:
+      """Converts the C data types to the desired Python data types."""
+      c_result = c_result_ptr[0]
+      py_result = ImageSegmenterResult.from_ctypes(c_result)
+      py_image = image_module.Image.create_from_ctypes(image_ptr)
+      return (py_result, py_image, timestamp_ms)
+
+    dispatcher = _AsyncResultDispatcher(converter=convert_result)
+    c_callback = dispatcher.wrap_callback(
+        options.result_callback, _C_TYPES_RESULT_CALLBACK
+    )
+    c_options = ImageSegmenterOptionsC.from_c_options(
+        base_options=options.base_options.to_ctypes(),
+        running_mode=options.running_mode,
+        output_confidence_masks=options.output_confidence_masks,
+        output_category_mask=options.output_category_mask,
+        result_callback=c_callback,
+    )
+    segmenter_handle = ctypes.c_void_p()
+    status = lib.MpImageSegmenterCreate(
+        ctypes.byref(c_options), ctypes.byref(segmenter_handle)
+    )
+    mediapipe_c_bindings.handle_status(status)
     return cls(
-        task_info.generate_graph_config(
-            enable_flow_limiting=options.running_mode
-            == _RunningMode.LIVE_STREAM
-        ),
-        options.running_mode,
-        packets_callback if options.result_callback else None,
+        lib=lib,
+        handle=segmenter_handle,
+        dispatcher=dispatcher,
+        async_callback=c_callback,
     )
 
   def segment(
@@ -296,34 +386,29 @@ class ImageSegmenter(base_vision_task_api.BaseVisionTaskApi):
       ValueError: If any of the input arguments is invalid.
       RuntimeError: If image segmentation failed to run.
     """
-    normalized_rect = self.convert_to_normalized_rect(
-        image_processing_options, image, roi_allowed=False
+    c_image = image._image_ptr  # pylint: disable=protected-access
+    c_result = ImageSegmenterResultC()
+    options_c = (
+        ctypes.byref(image_processing_options.to_ctypes())
+        if image_processing_options
+        else None
     )
-    output_packets = self._process_image_data({
-        _IMAGE_IN_STREAM_NAME: packet_creator.create_image(image),
-        _NORM_RECT_STREAM_NAME: packet_creator.create_proto(
-            normalized_rect.to_pb2()
-        ),
-    })
-    segmentation_result = ImageSegmenterResult()
-
-    if _CONFIDENCE_MASKS_STREAM_NAME in output_packets:
-      segmentation_result.confidence_masks = packet_getter.get_image_list(
-          output_packets[_CONFIDENCE_MASKS_STREAM_NAME]
-      )
-
-    if _CATEGORY_MASK_STREAM_NAME in output_packets:
-      segmentation_result.category_mask = packet_getter.get_image(
-          output_packets[_CATEGORY_MASK_STREAM_NAME]
-      )
-
-    return segmentation_result
+    status = self._lib.MpImageSegmenterSegmentImage(
+        self._handle,
+        c_image,
+        options_c,
+        ctypes.byref(c_result),
+    )
+    mediapipe_c_bindings.handle_status(status)
+    result = ImageSegmenterResult.from_ctypes(c_result)
+    self._lib.MpImageSegmenterCloseResult(ctypes.byref(c_result))
+    return result
 
   def segment_for_video(
       self,
       image: image_module.Image,
       timestamp_ms: int,
-      image_processing_options: Optional[_ImageProcessingOptions] = None,
+      image_processing_options: _ImageProcessingOptions | None = None,
   ) -> ImageSegmenterResult:
     """Performs segmentation on the provided video frames.
 
@@ -348,36 +433,30 @@ class ImageSegmenter(base_vision_task_api.BaseVisionTaskApi):
       ValueError: If any of the input arguments is invalid.
       RuntimeError: If image segmentation failed to run.
     """
-    normalized_rect = self.convert_to_normalized_rect(
-        image_processing_options, image, roi_allowed=False
+    c_image = image._image_ptr  # pylint: disable=protected-access
+    c_result = ImageSegmenterResultC()
+    options_c = (
+        ctypes.byref(image_processing_options.to_ctypes())
+        if image_processing_options
+        else None
     )
-    output_packets = self._process_video_data({
-        _IMAGE_IN_STREAM_NAME: packet_creator.create_image(image).at(
-            timestamp_ms * _MICRO_SECONDS_PER_MILLISECOND
-        ),
-        _NORM_RECT_STREAM_NAME: packet_creator.create_proto(
-            normalized_rect.to_pb2()
-        ).at(timestamp_ms * _MICRO_SECONDS_PER_MILLISECOND),
-    })
-    segmentation_result = ImageSegmenterResult()
-
-    if _CONFIDENCE_MASKS_STREAM_NAME in output_packets:
-      segmentation_result.confidence_masks = packet_getter.get_image_list(
-          output_packets[_CONFIDENCE_MASKS_STREAM_NAME]
-      )
-
-    if _CATEGORY_MASK_STREAM_NAME in output_packets:
-      segmentation_result.category_mask = packet_getter.get_image(
-          output_packets[_CATEGORY_MASK_STREAM_NAME]
-      )
-
-    return segmentation_result
+    status = self._lib.MpImageSegmenterSegmentForVideo(
+        self._handle,
+        c_image,
+        options_c,
+        timestamp_ms,
+        ctypes.byref(c_result),
+    )
+    mediapipe_c_bindings.handle_status(status)
+    result = ImageSegmenterResult.from_ctypes(c_result)
+    self._lib.MpImageSegmenterCloseResult(ctypes.byref(c_result))
+    return result
 
   def segment_async(
       self,
       image: image_module.Image,
       timestamp_ms: int,
-      image_processing_options: Optional[_ImageProcessingOptions] = None,
+      image_processing_options: _ImageProcessingOptions | None = None,
   ) -> None:
     """Sends live image data (an Image with a unique timestamp) to perform image segmentation.
 
@@ -406,20 +485,22 @@ class ImageSegmenter(base_vision_task_api.BaseVisionTaskApi):
       ValueError: If the current input timestamp is smaller than what the image
         segmenter has already processed.
     """
-    normalized_rect = self.convert_to_normalized_rect(
-        image_processing_options, image, roi_allowed=False
+    c_image = image._image_ptr  # pylint: disable=protected-access
+    options_c = (
+        ctypes.byref(image_processing_options.to_ctypes())
+        if image_processing_options
+        else None
     )
-    self._send_live_stream_data({
-        _IMAGE_IN_STREAM_NAME: packet_creator.create_image(image).at(
-            timestamp_ms * _MICRO_SECONDS_PER_MILLISECOND
-        ),
-        _NORM_RECT_STREAM_NAME: packet_creator.create_proto(
-            normalized_rect.to_pb2()
-        ).at(timestamp_ms * _MICRO_SECONDS_PER_MILLISECOND),
-    })
+    status = self._lib.MpImageSegmenterSegmentAsync(
+        self._handle,
+        c_image,
+        options_c,
+        timestamp_ms,
+    )
+    mediapipe_c_bindings.handle_status(status)
 
   @property
-  def labels(self) -> List[str]:
+  def labels(self) -> list[str]:
     """Get the category label list the ImageSegmenter can recognize.
 
     For CATEGORY_MASK type, the index in the category mask corresponds to the
@@ -430,4 +511,48 @@ class ImageSegmenter(base_vision_task_api.BaseVisionTaskApi):
     If there is no label map provided in the model file, empty label list is
     returned.
     """
+    if not self._labels:
+      c_labels = MpStringListC()
+      status = self._lib.MpImageSegmenterGetLabels(
+          self._handle,
+          ctypes.byref(c_labels),
+      )
+      mediapipe_c_bindings.handle_status(status)
+      self._labels = []
+      for i in range(c_labels.num_strings):
+        c_label = c_labels.strings[i]
+        label = ctypes.string_at(c_label).decode('utf-8')
+        self._labels.append(label)
+      self._lib.MpStringListFree(ctypes.byref(c_labels))
     return self._labels
+
+  def close(self):
+    """Closes ImageSegmenter."""
+    if self._handle:
+      status = self._lib.MpImageSegmenterClose(self._handle)
+      mediapipe_c_bindings.handle_status(status)
+    self._handle = None
+    self._dispatcher.close()
+    self._lib.close()
+
+  def __enter__(self):
+    """Returns `self` upon entering the runtime context."""
+    return self
+
+  def __exit__(self, exc_type, exc_value, traceback):
+    """Closes ImageSegmenters and exits the context manager.
+
+    Args:
+      exc_type: The exception type that caused the context manager to exit.
+      exc_value: The exception value that caused the context manager to exit.
+      traceback: The exception traceback that caused the context manager to
+        exit.
+
+    Raises:
+      RuntimeError: If the MediaPipe Gesture Recognizer task failed to
+      close.
+    """
+    self.close()
+
+  def __del__(self):
+    self.close()

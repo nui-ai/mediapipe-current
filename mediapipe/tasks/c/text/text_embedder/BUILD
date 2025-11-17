@@ -16,8 +16,6 @@ load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
-package(default_visibility = ["//mediapipe/tasks:internal"])
-
 licenses(["notice"])
 
 TEXT_EMBEDDER_DEPS = [
@@ -29,6 +27,8 @@ TEXT_EMBEDDER_DEPS = [
     "//mediapipe/tasks/c/components/processors:embedder_options_converter",
     "//mediapipe/tasks/c/core:base_options",
     "//mediapipe/tasks/c/core:base_options_converter",
+    "//mediapipe/tasks/c/core:mp_status",
+    "//mediapipe/tasks/c/core:mp_status_converter",
     "//mediapipe/tasks/cc/components/containers:embedding_result",
     "//mediapipe/tasks/cc/text/text_embedder",
 ]
@@ -93,6 +93,7 @@ cc_test(
         ":text_embedder_lib",
         "//mediapipe/framework/deps:file_path",
         "//mediapipe/framework/port:gtest",
+        "//mediapipe/tasks/c/core:mp_status",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
