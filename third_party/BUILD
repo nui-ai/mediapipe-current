@@ -155,6 +155,23 @@ alias(
         "//mediapipe:ios": "@ios_opencv//:opencv",
         ":opencv_darwin_prebuild": "//third_party/prebuilts:opencv_darwin",
         ":opencv_darwin_arm64_prebuild": "//third_party/prebuilts:opencv_darwin_arm64",
+        # if we want opencv version parity with our liberated mediapipe lib,
+        # we will have to switch this config below to dynamically link against the
+        # same version built by our liberated mediapipe repository's bazel build,
+        # and not build OpenCV from source here in this repository which uses
+        # a much older OpenCV version (3.4) than our liberated mediapipe repo (4.x)
+        # when building OpenCV from source not to mention different build flags.
+        # only for as long as our liberated libs still use opencv.
+        #
+        # only if we want to link code against both our mediapipe liberated
+        # libs and current mediapipe code from the current repo with (into)
+        # the same binary/executable ―
+        # if they somehow can't each hide its own opencv symbols
+        # as suggested in https://chatgpt.com/s/t_691b9f13d9b081918369343962cd6d33
+        #
+        # that's because the below config line which applies to our linux build
+        # does *not* use a prebuilt opencv, but rather rbuilds opencv from source
+        # (somewhat contrary to the current build definition's name above ("opencv_prebuilt").
         "//conditions:default": ":opencv_cmake",
     }),
 )
